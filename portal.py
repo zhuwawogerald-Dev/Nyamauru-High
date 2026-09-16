@@ -841,17 +841,32 @@ def generate_student_number(df_students):
     """
     Generates the next Student Number in the form R{YY}{NNN}, e.g.
     R26001, R26002... Sequence is scoped to the current year and derived
-    from the highest existing number under that year's prefix already in
-    the Students sheet — no separate counter to maintain, and it rolls
-    over to R27001 etc. on its own next year.
+    from the highest number seen under that year's prefix ACROSS BOTH the
+    Students sheet and Fee Payments — not just Students alone.
+
+    Why both: removing a student only deletes their Students row, on
+    purpose, so their payment history stays intact (see admin_all_students).
+    But if the generator only looked at Students, a freed-up number could
+    get handed to a brand new student — and that new student would then
+    inherit the removed student's old payments, since they're matched by
+    Student Number. Checking Fee Payments too means a number stays
+    retired forever once it's been used, even after the student who held
+    it is removed.
     """
     year_prefix = f"R{datetime.now().strftime('%y')}"
     max_seq = 0
-    if not df_students.empty and "Student Number" in df_students.columns:
-        existing = df_students["Student Number"].astype(str).str.strip()
-        for val in existing:
+
+    def scan(df, col):
+        nonlocal max_seq
+        if df is None or df.empty or col not in df.columns:
+            return
+        for val in df[col].astype(str).str.strip():
             if val.startswith(year_prefix) and val[len(year_prefix):].isdigit():
                 max_seq = max(max_seq, int(val[len(year_prefix):]))
+
+    scan(df_students, "Student Number")
+    scan(load_data("Fee Payments"), "Student Number")
+
     return f"{year_prefix}{max_seq + 1:03d}"
 
 def build_student_dropdown(df_students):
@@ -1989,6 +2004,7 @@ def admin_record_fee():
                 })
                 if success:
                     st.success(f"Payment of ${amount:,.2f} recorded for {student_name} ({academic_year}).")
+                    st.rerun()  # clears the form fields, so an accidental second click can't resubmit the same payment
                 else:
                     st.error("Failed to record payment.")
 
