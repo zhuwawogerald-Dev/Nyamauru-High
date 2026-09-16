@@ -1879,6 +1879,7 @@ def admin_fees_owing():
         df_payments.columns = df_payments.columns.astype(str).str.strip()
 
     rows = []
+    today_year = date.today().year
     for _, srow in df_students.iterrows():
         sid = str(srow.get("Student Number", "")).strip()
         name = str(srow.get("Student Name", "")).strip()
@@ -1886,6 +1887,8 @@ def admin_fees_owing():
             acad_year = int(srow.get("Academic Year", 0))
         except (ValueError, TypeError):
             continue
+        if acad_year <= 0 or acad_year > today_year:
+            continue  # a future enrolment isn't owed yet — matches compute_total_debtors()
         expected = pd.to_numeric(srow.get("Annual Fee", 0), errors="coerce") or 0.0
         paid = 0.0
         if not df_payments.empty and "Student Number" in df_payments.columns and "Academic Year" in df_payments.columns:
@@ -2065,11 +2068,46 @@ def admin_all_students():
         df_students.columns = df_students.columns.astype(str).str.strip()
         
         search = st.text_input("Search by name...")
+        display_df = df_students
         if search:
-            df_students = df_students[df_students["Student Name"].astype(str).str.contains(search, case=False)]
+            display_df = df_students[df_students["Student Name"].astype(str).str.contains(search, case=False)]
         
-        st.dataframe(df_students, use_container_width=True, hide_index=True)
-        st.markdown(f"**Total:** {len(df_students)} student(s)")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.markdown(f"**Total:** {len(display_df)} student(s)")
+
+        with st.container(border=True):
+            st.markdown("#### Remove a Student")
+            st.caption(
+                "Removes this registration row only — any Fee Payments already recorded "
+                "against them are left untouched, so past financial statements don't change. "
+                "This can't be undone from within the app."
+            )
+
+            options = ["Select student..."]
+            row_lookup = {}
+            for idx, row in df_students.iterrows():
+                sid = str(row.get("Student Number", "")).strip()
+                name = str(row.get("Student Name", "")).strip()
+                year = row.get("Academic Year", "")
+                label = f"{name} — {year} ({sid})"
+                options.append(label)
+                row_lookup[label] = idx
+
+            selected = st.selectbox("Student to remove", options, key="remove_student_select")
+
+            if selected != "Select student...":
+                confirm = st.checkbox(f"I'm sure I want to permanently remove '{selected}'", key="remove_student_confirm")
+                if st.button("Remove Student", use_container_width=True, key="remove_student_btn"):
+                    if not confirm:
+                        st.error("Please tick the confirmation box first.")
+                    else:
+                        remaining = df_students.drop(index=row_lookup[selected]).reset_index(drop=True)
+                        success = overwrite_sheet("Students", remaining)
+                        if success:
+                            st.success(f"'{selected}' removed.")
+                            st.rerun()
+                        else:
+                            st.error("Failed to remove student.")
     else:
         st.info("No students registered yet.")
 
